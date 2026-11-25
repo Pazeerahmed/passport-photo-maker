@@ -38,3 +38,7 @@ Use the included `render.yaml` with Render Blueprint. GitHub Pages alone cannot 
 ## Important
 
 This tool does not certify compliance with official passport requirements. Each country and issuing authority may require a specific background, head position and photo size. Check its rules before submitting a photo. Uploaded photos are processed in memory; the application does not intentionally save uploads, but your hosting service may process the data. Use HTTPS.
+
+## Vercel troubleshooting
+
+On Vercel, the application uses the smaller `u2netp` rembg model and stores it in the writable `/tmp` directory. The model downloads on a cold start, so the first request can take longer. If processing fails, open Vercel → Project → Logs → Runtime and inspect the Python exception. Serverless memory, execution time, or upload size limits may still prevent AI processing. For reliable AI processing, a persistent Python server with enough RAM is recommended.
