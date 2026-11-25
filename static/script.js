@@ -10,6 +10,8 @@ let photo = null;
 let objectUrl = null;
 let detectedFace = null;
 let detectionRun = 0;
+let processing = false;
+let editVersion = 0;
 const cropInputs = ['zoom', 'shiftX', 'shiftY'].map(id => document.getElementById(id));
 function updateCrop() {
   ['zoomValue', 'shiftXValue', 'shiftYValue'].forEach((id, i) => {
@@ -60,7 +62,7 @@ async function detectFace(file, run) {
     if (box) {
       detectedFace = [box.x / bitmap.width, box.y / bitmap.height, box.width / bitmap.width, box.height / bitmap.height]
         .map(v => Math.max(0, Math.min(1, v)));
-      message.textContent = '✓ Face detected! Adjust zoom and position, then generate.';
+      message.textContent = '✓ Face detected — automatic passport crop ready.';
     } else {
       message.textContent = 'No face found. Use a clear front-facing portrait; automatic outline crop will be used.';
     }
@@ -88,11 +90,12 @@ document.getElementById('resetAdjustments').addEventListener('click', () => {
 });
 
 function disableDownload() {
+  editVersion++;
   download.classList.add('disabled');
   download.setAttribute('aria-disabled', 'true');
   download.removeAttribute('href');
 }
-function setFile(file) {
+async function setFile(file) {
   if (!file) return;
   if (!['image/jpeg','image/png','image/webp'].includes(file.type)) {
     status.textContent = 'Please use a JPG, PNG or WEBP photo.'; return;
@@ -103,15 +106,16 @@ function setFile(file) {
   photo = file;
   detectedFace = null;
   const run = ++detectionRun;
-  detectFace(file, run);
-  generate.disabled = false;
-  status.textContent = 'Ready: ' + file.name;
+  generate.disabled = true;
+  status.textContent = 'AI is detecting your face and preparing your photo automatically…';
   dropzone.querySelector('strong').textContent = file.name;
   dropzone.querySelector('small').textContent = (file.size / 1024 / 1024).toFixed(2) + ' MB · Click to replace';
   if (objectUrl) URL.revokeObjectURL(objectUrl);
   objectUrl = URL.createObjectURL(file);
   result.src = objectUrl; result.hidden = false; placeholder.hidden = true;
   disableDownload();
+  await detectFace(file, run);
+  if (run === detectionRun) await processPhoto();
 }
 input.addEventListener('change', () => setFile(input.files[0]));
 ['dragenter','dragover'].forEach(type => dropzone.addEventListener(type, event => {
@@ -131,14 +135,18 @@ document.getElementById('size').addEventListener('change', () => {
   disableDownload();
   if (photo) status.textContent = 'Size changed. Generate again to update your photo.';
 });
-generate.addEventListener('click', async () => {
-  if (!photo) return;
+async function processPhoto() {
+  if (!photo || processing) return;
+  processing = true;
+  const run = detectionRun;
+  const version = editVersion;
   const body = new FormData();
   body.append('photo', photo);
   body.append('background', document.querySelector('input[name="background"]:checked').value);
   body.append('size', document.getElementById('size').value);
   body.append('smooth', smoothSlider.value);
   body.append('brightness', brightnessSlider.value);
+  body.append('auto_enhance', 'true');
   if (detectedFace) body.append('face', detectedFace.join(','));
   body.append('zoom', cropInputs[0].value);
   body.append('shift_x', cropInputs[1].value);
@@ -153,6 +161,7 @@ generate.addEventListener('click', async () => {
       throw new Error(error.error || 'Unable to process this photo.');
     }
     const blob = await response.blob();
+    if (run !== detectionRun || version !== editVersion) return;
     if (objectUrl) URL.revokeObjectURL(objectUrl);
     objectUrl = URL.createObjectURL(blob);
     result.src = objectUrl; result.hidden = false; placeholder.hidden = true;
@@ -162,9 +171,12 @@ generate.addEventListener('click', async () => {
     download.setAttribute('aria-disabled', 'false');
     status.textContent = 'Your photo is ready to download.';
   } catch (error) {
-    status.textContent = error.message;
+    if (run === detectionRun) status.textContent = error.message;
   } finally {
-    generate.disabled = false;
-    generate.textContent = '✦ Remove Background & Create Photo';
+    processing = false;
+    if (run !== detectionRun && photo) { processPhoto(); return; }
+    generate.disabled = !photo;
+    generate.textContent = '↻ Regenerate Photo';
   }
-});
+}
+generate.addEventListener('click', processPhoto);
