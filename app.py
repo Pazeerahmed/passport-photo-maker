@@ -126,7 +126,7 @@ def crop_around_face(image, dimensions, face, zoom, shift_x, shift_y):
                                         round(left + crop_width), round(top + crop_height)))
     return framed.resize(dimensions, Image.Resampling.LANCZOS)
 
-def make_photo(data, background, size_key, smooth=0, brightness=0, face=None, zoom=100, shift_x=0, shift_y=0):
+def make_photo(data, background, size_key, smooth=0, brightness=0, face=None, zoom=100, shift_x=0, shift_y=0, auto_enhance=False):
     if background not in COLORS or size_key not in SIZES:
         raise ValueError("Choose a valid background color and photo size.")
     try:
@@ -149,6 +149,19 @@ def make_photo(data, background, size_key, smooth=0, brightness=0, face=None, zo
     dimensions = (round(width_mm / 25.4 * 300), round(height_mm / 25.4 * 300))
     fitted = (crop_around_face(cutout, dimensions, face, zoom, shift_x, shift_y)
               if face is not None else crop_head_and_chest(cutout, dimensions))
+    if auto_enhance:
+        from PIL import ImageStat
+        rgb = fitted.convert("RGB")
+        luminance = ImageStat.Stat(rgb.convert("L")).mean[0]
+        if luminance < 105:
+            rgb = ImageEnhance.Brightness(rgb).enhance(min(1.20, 115 / max(1, luminance)))
+        elif luminance > 205:
+            rgb = ImageEnhance.Brightness(rgb).enhance(max(0.90, 195 / luminance))
+        rgb = ImageEnhance.Contrast(rgb).enhance(1.035)
+        alpha = fitted.getchannel("A")
+        fitted = rgb.convert("RGBA")
+        fitted.putalpha(alpha)
+        smooth = max(smooth, 12)
     fitted = soften_skin(fitted, smooth)
     if brightness:
         soften_skin_alpha = fitted.getchannel("A")
@@ -197,7 +210,7 @@ def process():
             face = tuple(float(value) for value in parts)
             if not all(__import__("math").isfinite(value) for value in face):
                 raise ValueError("Invalid face coordinates.")
-        photo = make_photo(data, background, size, smooth, brightness, face, zoom, shift_x, shift_y)
+        photo = make_photo(data, background, size, smooth, brightness, face, zoom, shift_x, shift_y, request.form.get('auto_enhance') == 'true')
     except ValueError as exc:
         return jsonify(error=str(exc)), 400
     except Exception as exc:
