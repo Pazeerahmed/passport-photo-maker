@@ -110,7 +110,23 @@ def crop_head_and_chest(cutout, dimensions):
     ))
     return framed.resize(dimensions, Image.Resampling.LANCZOS)
 
-def make_photo(data, background, size_key, smooth=0, brightness=0):
+def crop_around_face(image, dimensions, face, zoom, shift_x, shift_y):
+    width, height = image.size
+    x, y, w, h = face
+    if not (0 <= x <= 1 and 0 <= y <= 1 and 0 < w <= 1 and 0 < h <= 1
+            and x + w <= 1.01 and y + h <= 1.01):
+        raise ValueError("Invalid face coordinates.")
+    crop_height = h * height / 0.37 * 100 / zoom
+    crop_width = crop_height * dimensions[0] / dimensions[1]
+    center_x = (x + w / 2) * width
+    center_y = (y + h / 2) * height
+    left = center_x - crop_width / 2 + crop_width * shift_x / 100
+    top = center_y - crop_height * 0.36 + crop_height * shift_y / 100
+    framed = image.convert("RGBA").crop((round(left), round(top),
+                                        round(left + crop_width), round(top + crop_height)))
+    return framed.resize(dimensions, Image.Resampling.LANCZOS)
+
+def make_photo(data, background, size_key, smooth=0, brightness=0, face=None, zoom=100, shift_x=0, shift_y=0):
     if background not in COLORS or size_key not in SIZES:
         raise ValueError("Choose a valid background color and photo size.")
     try:
@@ -131,7 +147,8 @@ def make_photo(data, background, size_key, smooth=0, brightness=0):
         cutout = Image.open(io.BytesIO(cutout)).convert("RGBA")
     width_mm, height_mm = SIZES[size_key]
     dimensions = (round(width_mm / 25.4 * 300), round(height_mm / 25.4 * 300))
-    fitted = crop_head_and_chest(cutout, dimensions)
+    fitted = (crop_around_face(cutout, dimensions, face, zoom, shift_x, shift_y)
+              if face is not None else crop_head_and_chest(cutout, dimensions))
     fitted = soften_skin(fitted, smooth)
     if brightness:
         soften_skin_alpha = fitted.getchannel("A")
@@ -168,7 +185,19 @@ def process():
     if len(data) > 12 * 1024 * 1024:
         return jsonify(error="File exceeds the 12 MB limit."), 413
     try:
-        photo = make_photo(data, background, size, smooth, brightness)
+        zoom = adjustment(request.form.get("zoom", "100"), "Zoom", 70, 200)
+        shift_x = adjustment(request.form.get("shift_x", "0"), "Horizontal position", -40, 40)
+        shift_y = adjustment(request.form.get("shift_y", "0"), "Vertical position", -40, 40)
+        face_text = request.form.get("face", "")
+        face = None
+        if face_text:
+            parts = face_text.split(",")
+            if len(parts) != 4:
+                raise ValueError("Invalid face coordinates.")
+            face = tuple(float(value) for value in parts)
+            if not all(__import__("math").isfinite(value) for value in face):
+                raise ValueError("Invalid face coordinates.")
+        photo = make_photo(data, background, size, smooth, brightness, face, zoom, shift_x, shift_y)
     except ValueError as exc:
         return jsonify(error=str(exc)), 400
     except Exception as exc:
