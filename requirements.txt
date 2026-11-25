@@ -1,0 +1,5 @@
+Flask>=3.1,<4
+Pillow>=11,<13
+rembg[cpu]>=2.0.67,<3
+onnxruntime>=1.20,<2
+gunicorn>=23,<24
