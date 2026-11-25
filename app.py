@@ -1,5 +1,7 @@
 import io
 import os
+import tempfile
+from functools import lru_cache
 from flask import Flask, jsonify, render_template, request, send_file
 from PIL import Image, ImageOps, UnidentifiedImageError
 
@@ -8,6 +10,14 @@ app.config["MAX_CONTENT_LENGTH"] = 12 * 1024 * 1024
 SIZES = {"35x45": (35, 45), "2x2": (50.8, 50.8), "25x35": (25, 35)}
 COLORS = {"blue": "#1689df", "white": "#ffffff"}
 Image.MAX_IMAGE_PIXELS = 25_000_000
+# Vercel functions have a read-only project filesystem. Models must live in /tmp.
+if os.environ.get("VERCEL"):
+    os.environ.setdefault("U2NET_HOME", os.path.join(tempfile.gettempdir(), ".u2net"))
+
+@lru_cache(maxsize=1)
+def background_session():
+    from rembg import new_session
+    return new_session("u2netp")
 
 def make_photo(data, background, size_key):
     if background not in COLORS or size_key not in SIZES:
@@ -23,7 +33,7 @@ def make_photo(data, background, size_key):
     if source.width * source.height > 25_000_000:
         raise ValueError("Please upload an image under 25 megapixels.")
     from rembg import remove
-    cutout = remove(source.convert("RGBA"))
+    cutout = remove(source.convert("RGBA"), session=background_session())
     if not isinstance(cutout, Image.Image):
         cutout = Image.open(io.BytesIO(cutout)).convert("RGBA")
     width_mm, height_mm = SIZES[size_key]
@@ -60,9 +70,9 @@ def process():
         photo = make_photo(data, background, size)
     except ValueError as exc:
         return jsonify(error=str(exc)), 400
-    except Exception:
-        app.logger.exception("Photo processing failed")
-        return jsonify(error="Could not process this photo. Please try again."), 500
+    except Exception as exc:
+        app.logger.exception("Photo processing failed: %s", type(exc).__name__)
+        return jsonify(error="AI background removal failed on the server. Check Vercel Runtime Logs for the detailed error."), 500
     return send_file(photo, mimetype="image/jpeg", download_name=f"passport-{background}-{size}.jpg")
 
 @app.errorhandler(413)
