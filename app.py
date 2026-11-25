@@ -55,35 +55,59 @@ def soften_skin(image, strength):
     return blended
 
 def crop_head_and_chest(cutout, dimensions):
-    """Frame the top of the detected foreground, including shoulders and upper chest.
+    """Frame head, shoulders and upper chest, even in seated/full-body images.
 
-    The segmentation alpha gives an approximate subject silhouette, not facial
-    landmarks. Keep headroom and use the upper body rather than the full height.
+    Estimate head width from the *top* of the foreground silhouette instead
+    of the widest point of the body. This is not facial landmark detection.
     """
     subject = cutout.convert("RGBA")
     width, height = subject.size
-    alpha = subject.getchannel("A")
-    # Ignore faint alpha noise around the subject.
-    silhouette = alpha.point(lambda value: 255 if value >= 80 else 0)
-    bounds = silhouette.getbbox()
+    # Analyze a small mask to avoid expensive full-resolution pixel loops.
+    scale = min(1.0, 320 / max(width, height))
+    mask = subject.getchannel("A").resize(
+        (max(1, round(width * scale)), max(1, round(height * scale))),
+        Image.Resampling.NEAREST,
+    ).point(lambda value: 255 if value >= 110 else 0)
+    bounds = mask.getbbox()
     if bounds is None:
         return ImageOps.fit(subject, dimensions, method=Image.Resampling.LANCZOS)
 
     left, top, right, bottom = bounds
-    subject_width = max(1, right - left)
-    # The subject fills about 80% of the passport photo's width.
-    crop_width = max(subject_width * 1.23, width * 0.28)
+    mask_width, mask_height = mask.size
+    subject_height = max(1, bottom - top)
+    # The head usually occupies the first 12-25% of a visible person.
+    # Scan several rows and take the median to ignore hair tips/noise.
+    widths = []
+    centers = []
+    for fraction in (0.10, 0.14, 0.18, 0.22, 0.26):
+        y = min(mask_height - 1, top + round(subject_height * fraction))
+        row = mask.crop((0, y, mask_width, y + 1)).getbbox()
+        if row:
+            widths.append(row[2] - row[0])
+            centers.append((row[0] + row[2]) / 2)
+    if widths:
+        sorted_widths = sorted(widths)
+        head_width = sorted_widths[len(sorted_widths) // 2]
+        center_x = sorted(centers)[len(centers) // 2]
+    else:
+        head_width = max(1, (right - left) * 0.4)
+        center_x = (left + right) / 2
+
+    # Roughly 2.8 head-widths across gives room for both shoulders.
+    # Cap zoom-out to prevent legs or furniture entering the frame.
+    crop_width = max(head_width * 2.8, mask_width * 0.16)
+    crop_width = min(crop_width, mask_width * 0.88)
     crop_height = crop_width * dimensions[1] / dimensions[0]
-    # Leave 9% headroom, with shoulders and upper chest below.
     crop_top = top - crop_height * 0.09
-    center_x = (left + right) / 2
     crop_left = center_x - crop_width / 2
-    crop_box = (
-        round(crop_left), round(crop_top),
-        round(crop_left + crop_width), round(crop_top + crop_height),
-    )
-    # Pillow pads out-of-bounds RGBA crops with transparent pixels.
-    framed = subject.crop(crop_box)
+    factor_x = width / mask_width
+    factor_y = height / mask_height
+    framed = subject.crop((
+        round(crop_left * factor_x),
+        round(crop_top * factor_y),
+        round((crop_left + crop_width) * factor_x),
+        round((crop_top + crop_height) * factor_y),
+    ))
     return framed.resize(dimensions, Image.Resampling.LANCZOS)
 
 def make_photo(data, background, size_key, smooth=0, brightness=0):
