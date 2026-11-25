@@ -54,6 +54,38 @@ def soften_skin(image, strength):
     blended.putalpha(image.getchannel("A"))
     return blended
 
+def crop_head_and_chest(cutout, dimensions):
+    """Frame the top of the detected foreground, including shoulders and upper chest.
+
+    The segmentation alpha gives an approximate subject silhouette, not facial
+    landmarks. Keep headroom and use the upper body rather than the full height.
+    """
+    subject = cutout.convert("RGBA")
+    width, height = subject.size
+    alpha = subject.getchannel("A")
+    # Ignore faint alpha noise around the subject.
+    silhouette = alpha.point(lambda value: 255 if value >= 80 else 0)
+    bounds = silhouette.getbbox()
+    if bounds is None:
+        return ImageOps.fit(subject, dimensions, method=Image.Resampling.LANCZOS)
+
+    left, top, right, bottom = bounds
+    subject_width = max(1, right - left)
+    # The subject fills about 80% of the passport photo's width.
+    crop_width = max(subject_width * 1.23, width * 0.28)
+    crop_height = crop_width * dimensions[1] / dimensions[0]
+    # Leave 9% headroom, with shoulders and upper chest below.
+    crop_top = top - crop_height * 0.09
+    center_x = (left + right) / 2
+    crop_left = center_x - crop_width / 2
+    crop_box = (
+        round(crop_left), round(crop_top),
+        round(crop_left + crop_width), round(crop_top + crop_height),
+    )
+    # Pillow pads out-of-bounds RGBA crops with transparent pixels.
+    framed = subject.crop(crop_box)
+    return framed.resize(dimensions, Image.Resampling.LANCZOS)
+
 def make_photo(data, background, size_key, smooth=0, brightness=0):
     if background not in COLORS or size_key not in SIZES:
         raise ValueError("Choose a valid background color and photo size.")
@@ -75,7 +107,7 @@ def make_photo(data, background, size_key, smooth=0, brightness=0):
         cutout = Image.open(io.BytesIO(cutout)).convert("RGBA")
     width_mm, height_mm = SIZES[size_key]
     dimensions = (round(width_mm / 25.4 * 300), round(height_mm / 25.4 * 300))
-    fitted = ImageOps.fit(cutout.convert("RGBA"), dimensions, method=Image.Resampling.LANCZOS, centering=(0.5, 0.32))
+    fitted = crop_head_and_chest(cutout, dimensions)
     fitted = soften_skin(fitted, smooth)
     if brightness:
         soften_skin_alpha = fitted.getchannel("A")
