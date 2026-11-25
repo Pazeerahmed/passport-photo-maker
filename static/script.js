@@ -8,6 +8,70 @@ const download = document.getElementById('download');
 const placeholder = document.querySelector('.placeholder');
 let photo = null;
 let objectUrl = null;
+let detectedFace = null;
+let detectionRun = 0;
+const cropInputs = ['zoom', 'shiftX', 'shiftY'].map(id => document.getElementById(id));
+function updateCrop() {
+  ['zoomValue', 'shiftXValue', 'shiftYValue'].forEach((id, i) => {
+    document.getElementById(id).textContent = cropInputs[i].value + (i === 0 ? '%' : '');
+  });
+  disableDownload();
+  if (photo) status.textContent = 'Crop changed. Generate again to apply.';
+}
+cropInputs.forEach(slider => slider.addEventListener('input', updateCrop));
+document.getElementById('resetCrop').addEventListener('click', () => {
+  cropInputs.forEach((slider, i) => { slider.value = i === 0 ? '100' : '0'; });
+  updateCrop();
+});
+async function detectFace(file, run) {
+  const message = document.getElementById('faceStatus');
+  message.textContent = 'Detecting face on your device…';
+  let bitmap;
+  try {
+    bitmap = await createImageBitmap(file, {imageOrientation:'from-image'});
+    let box = null;
+    if ('FaceDetector' in window) {
+      try {
+        const faces = await new FaceDetector({fastMode:true, maxDetectedFaces:1}).detect(bitmap);
+        if (faces.length) box = faces[0].boundingBox;
+      } catch (_) { /* Try the free MediaPipe detector instead. */ }
+    }
+    if (!box) {
+      const {FaceDetector: MPFaceDetector, FilesetResolver} = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/+esm');
+      const vision = await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm');
+      const detector = await MPFaceDetector.createFromOptions(vision, {
+        baseOptions: {modelAssetPath:'https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite'},
+        runningMode:'IMAGE'
+      });
+      try {
+        const canvas = document.createElement('canvas');
+        const scale = Math.min(1, 1024 / Math.max(bitmap.width, bitmap.height));
+        canvas.width = Math.round(bitmap.width * scale);
+        canvas.height = Math.round(bitmap.height * scale);
+        canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+        const detections = detector.detect(canvas).detections;
+        if (detections.length) {
+          const b = detections.sort((a,b) => b.boundingBox.width * b.boundingBox.height - a.boundingBox.width * a.boundingBox.height)[0].boundingBox;
+          box = {x:b.originX / scale, y:b.originY / scale, width:b.width / scale, height:b.height / scale};
+        }
+      } finally { detector.close(); }
+    }
+    if (run !== detectionRun) return;
+    if (box) {
+      detectedFace = [box.x / bitmap.width, box.y / bitmap.height, box.width / bitmap.width, box.height / bitmap.height]
+        .map(v => Math.max(0, Math.min(1, v)));
+      message.textContent = '✓ Face detected! Adjust zoom and position, then generate.';
+    } else {
+      message.textContent = 'No face found. Use a clear front-facing portrait; automatic outline crop will be used.';
+    }
+  } catch (error) {
+    if (run === detectionRun) message.textContent = 'Face detection unavailable. Check internet access; outline crop remains available.';
+    console.warn('Face detection:', error);
+  } finally {
+    if (bitmap) bitmap.close();
+  }
+}
+
 const smoothSlider = document.getElementById('smooth');
 const brightnessSlider = document.getElementById('brightness');
 function updateAdjustments() {
@@ -37,6 +101,9 @@ function setFile(file) {
     status.textContent = 'The maximum file size is 12 MB.'; return;
   }
   photo = file;
+  detectedFace = null;
+  const run = ++detectionRun;
+  detectFace(file, run);
   generate.disabled = false;
   status.textContent = 'Ready: ' + file.name;
   dropzone.querySelector('strong').textContent = file.name;
@@ -72,6 +139,10 @@ generate.addEventListener('click', async () => {
   body.append('size', document.getElementById('size').value);
   body.append('smooth', smoothSlider.value);
   body.append('brightness', brightnessSlider.value);
+  if (detectedFace) body.append('face', detectedFace.join(','));
+  body.append('zoom', cropInputs[0].value);
+  body.append('shift_x', cropInputs[1].value);
+  body.append('shift_y', cropInputs[2].value);
   generate.disabled = true;
   generate.textContent = 'Processing your photo…';
   status.textContent = 'Removing the background. First-time processing may take longer.';

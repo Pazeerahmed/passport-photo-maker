@@ -1,6 +1,6 @@
 import io
 import unittest
-from app import app, adjustment, soften_skin, crop_head_and_chest
+from app import app, adjustment, soften_skin, crop_head_and_chest, crop_around_face
 from PIL import Image
 
 class WebTests(unittest.TestCase):
@@ -43,6 +43,16 @@ class WebTests(unittest.TestCase):
     def test_empty_foreground_fallback(self):
         image = Image.new("RGBA", (100, 200), (0, 0, 0, 0))
         self.assertEqual(crop_head_and_chest(image, (200, 260)).size, (200, 260))
+
+    def test_face_crop_and_zoom(self):
+        image = Image.new("RGBA", (600, 900), (120, 80, 60, 255))
+        face = (0.4, 0.15, 0.2, 0.15)
+        a = crop_around_face(image, (413, 531), face, 100, 0, 0)
+        b = crop_around_face(image, (413, 531), face, 150, 0, 0)
+        self.assertEqual(a.size, (413, 531))
+        self.assertEqual(b.size, (413, 531))
+        with self.assertRaises(ValueError):
+            crop_around_face(image, (413, 531), (2, 0, 0.2, 0.2), 100, 0, 0)
 
     def test_missing_upload(self):
         self.assertEqual(self.client.post("/api/process").status_code, 400)
