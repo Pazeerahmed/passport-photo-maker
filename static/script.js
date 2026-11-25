@@ -174,6 +174,7 @@ async function processPhoto() {
     if (run === detectionRun) status.textContent = error.message;
   } finally {
     processing = false;
+    if (run !== detectionRun && photo) { processPhoto(); return; }
     generate.disabled = !photo;
     generate.textContent = '↻ Regenerate Photo';
   }
