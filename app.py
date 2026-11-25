@@ -3,7 +3,7 @@ import os
 import tempfile
 from functools import lru_cache
 from flask import Flask, jsonify, render_template, request, send_file
-from PIL import Image, ImageOps, UnidentifiedImageError
+from PIL import Image, ImageOps, ImageFilter, UnidentifiedImageError
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 12 * 1024 * 1024
@@ -19,7 +19,9 @@ def background_session():
     from rembg import new_session
     return new_session("u2netp")
 
-def make_photo(data, background, size_key):
+def make_photo(data, background, size_key, cleanup=0):
+    if not isinstance(cleanup, int) or not 0 <= cleanup <= 100:
+        raise ValueError('Face cleanup must be between 0 and 100.')
     if background not in COLORS or size_key not in SIZES:
         raise ValueError("Choose a valid background color and photo size.")
     try:
@@ -39,6 +41,15 @@ def make_photo(data, background, size_key):
     width_mm, height_mm = SIZES[size_key]
     dimensions = (round(width_mm / 25.4 * 300), round(height_mm / 25.4 * 300))
     fitted = ImageOps.fit(cutout.convert("RGBA"), dimensions, method=Image.Resampling.LANCZOS, centering=(0.5, 0.32))
+    cutout_alpha = fitted.getchannel("A")
+    if cleanup:
+        # Mild, adjustable softening of the subject, preserving the cutout alpha edge.
+        # No face detector is required, keeping this compatible with Vercel.
+        rgb = fitted.convert("RGB")
+        softened = rgb.filter(ImageFilter.GaussianBlur(radius=0.3 + 1.5 * cleanup / 100))
+        mixed = Image.blend(rgb, softened, 0.65 * cleanup / 100)
+        fitted = mixed.convert("RGBA")
+        fitted.putalpha(cutout_alpha)
     backdrop = Image.new("RGBA", dimensions, COLORS[background])
     backdrop.alpha_composite(fitted)
     output = io.BytesIO()
@@ -63,11 +74,17 @@ def process():
     size = request.form.get("size", "35x45")
     if background not in COLORS or size not in SIZES:
         return jsonify(error="Invalid background or photo size."), 400
+    try:
+        cleanup = int(request.form.get("cleanup", "0"))
+    except (ValueError, TypeError):
+        return jsonify(error="Face cleanup must be between 0 and 100."), 400
+    if not 0 <= cleanup <= 100:
+        return jsonify(error="Face cleanup must be between 0 and 100."), 400
     data = uploaded.read(12 * 1024 * 1024 + 1)
     if len(data) > 12 * 1024 * 1024:
         return jsonify(error="File exceeds the 12 MB limit."), 413
     try:
-        photo = make_photo(data, background, size)
+        photo = make_photo(data, background, size, cleanup)
     except ValueError as exc:
         return jsonify(error=str(exc)), 400
     except Exception as exc:
