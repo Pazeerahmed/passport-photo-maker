@@ -28,6 +28,18 @@ class WebTests(unittest.TestCase):
         self.assertEqual(cropped.size, (413, 531))
         self.assertEqual(cropped.mode, "RGBA")
 
+    def test_full_body_crop_excludes_legs(self):
+        from PIL import ImageDraw
+        image = Image.new("RGBA", (300, 700), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(image)
+        draw.ellipse((125, 40, 175, 120), fill=(200, 150, 120, 255))
+        draw.rectangle((75, 120, 225, 350), fill=(240, 240, 240, 255))
+        draw.rectangle((55, 350, 245, 680), fill=(255, 0, 0, 255))
+        cropped = crop_head_and_chest(image, (413, 531))
+        self.assertEqual(cropped.size, (413, 531))
+        self.assertFalse(any(r > 230 and g < 30 and b < 30 and a > 100
+                             for r, g, b, a in cropped.getdata()))
+
     def test_empty_foreground_fallback(self):
         image = Image.new("RGBA", (100, 200), (0, 0, 0, 0))
         self.assertEqual(crop_head_and_chest(image, (200, 260)).size, (200, 260))
