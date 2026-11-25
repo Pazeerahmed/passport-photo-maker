@@ -8,6 +8,20 @@ const download = document.getElementById('download');
 const placeholder = document.querySelector('.placeholder');
 let photo = null;
 let objectUrl = null;
+const smoothSlider = document.getElementById('smooth');
+const brightnessSlider = document.getElementById('brightness');
+function updateAdjustments() {
+  document.getElementById('smoothValue').textContent = smoothSlider.value + '%';
+  document.getElementById('brightnessValue').textContent = (Number(brightnessSlider.value) > 0 ? '+' : '') + brightnessSlider.value + '%';
+  disableDownload();
+  if (photo) status.textContent = 'Adjustments changed. Generate again to update your photo.';
+}
+[smoothSlider, brightnessSlider].forEach(slider => slider.addEventListener('input', updateAdjustments));
+document.getElementById('resetAdjustments').addEventListener('click', () => {
+  smoothSlider.value = 0;
+  brightnessSlider.value = 0;
+  updateAdjustments();
+});
 
 function disableDownload() {
   download.classList.add('disabled');
@@ -56,6 +70,8 @@ generate.addEventListener('click', async () => {
   body.append('photo', photo);
   body.append('background', document.querySelector('input[name="background"]:checked').value);
   body.append('size', document.getElementById('size').value);
+  body.append('smooth', smoothSlider.value);
+  body.append('brightness', brightnessSlider.value);
   generate.disabled = true;
   generate.textContent = 'Processing your photo…';
   status.textContent = 'Removing the background. First-time processing may take longer.';
