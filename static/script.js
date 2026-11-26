@@ -63,8 +63,34 @@ async function detectFace(file, run) {
       } catch (_) { /* Try the free MediaPipe detector instead. */ }
     }
     if (!box) {
-      const {FaceDetector: MPFaceDetector, FilesetResolver} = await withTimeout(import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/+esm'), 12000, 'Face detector download timed out');
-      const vision = await withTimeout(FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm'), 12000, 'Face detector initialization timed out');
+      // CDNs are sometimes blocked by networks or browser extensions.
+      // Try multiple independent ESM providers instead of failing immediately.
+      let visionModule;
+      const moduleUrls = [
+        'https://esm.sh/@mediapipe/tasks-vision@0.10.22',
+        'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/+esm'
+      ];
+      for (const url of moduleUrls) {
+        try {
+          visionModule = await withTimeout(import(/* webpackIgnore: true */ url), 10000, 'Face detector download timed out');
+          if (visionModule.FaceDetector && visionModule.FilesetResolver) break;
+        } catch (error) { console.warn('Face detector provider unavailable:', url, error); }
+      }
+      if (!visionModule?.FaceDetector || !visionModule?.FilesetResolver) {
+        throw new Error('Face detector download blocked. Try another network or disable content-blocking extensions');
+      }
+      const {FaceDetector: MPFaceDetector, FilesetResolver} = visionModule;
+      let vision;
+      for (const wasmBase of [
+        'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm',
+        'https://unpkg.com/@mediapipe/tasks-vision@0.10.22/wasm'
+      ]) {
+        try {
+          vision = await withTimeout(FilesetResolver.forVisionTasks(wasmBase), 10000, 'WASM loading timed out');
+          break;
+        } catch (error) { console.warn('WASM provider unavailable:', wasmBase, error); }
+      }
+      if (!vision) throw new Error('Face detector runtime could not load');
       const detector = await withTimeout(MPFaceDetector.createFromOptions(vision, {
         baseOptions: {modelAssetPath:'https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite'},
         runningMode:'IMAGE'
