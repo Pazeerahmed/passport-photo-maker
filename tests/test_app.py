@@ -54,6 +54,14 @@ class WebTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             crop_around_face(image, (413, 531), (2, 0, 0.2, 0.2), 100, 0, 0)
 
+    def test_face_required_rejects_missing_detection(self):
+        response = self.client.post("/api/process", data={
+            "photo": (io.BytesIO(b"not an image"), "photo.jpg"),
+            "require_face": "true",
+        })
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Face detection is required", response.json["error"])
+
     def test_missing_upload(self):
         self.assertEqual(self.client.post("/api/process").status_code, 400)
     def test_invalid_background(self):
