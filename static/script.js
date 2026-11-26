@@ -12,6 +12,29 @@ let detectedFace = null;
 let detectionRun = 0;
 let processing = false;
 let editVersion = 0;
+const formalSuit = document.getElementById('formalSuit');
+formalSuit.addEventListener('change', () => {
+  disableDownload();
+  if (photo) status.textContent = 'Clothing option changed. Click Regenerate Photo.';
+});
+async function addSuitTemplate(blob) {
+  if (!formalSuit.checked) return blob;
+  const source = await createImageBitmap(blob);
+  const overlay = new Image();
+  overlay.src = '/static/formal-suit.svg';
+  try {
+    await overlay.decode();
+    const canvas = document.createElement('canvas');
+    canvas.width = source.width;
+    canvas.height = source.height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(source, 0, 0);
+    // Start below the face; simple illustrative clothing overlay only.
+    const start = Math.round(canvas.height * 0.68);
+    ctx.drawImage(overlay, 0, start, canvas.width, canvas.height - start);
+    return await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.94));
+  } finally { source.close(); }
+}
 const cropInputs = ['zoom', 'shiftX', 'shiftY'].map(id => document.getElementById(id));
 function updateCrop() {
   ['zoomValue', 'shiftXValue', 'shiftYValue'].forEach((id, i) => {
@@ -160,7 +183,7 @@ async function processPhoto() {
       const error = await response.json().catch(() => ({}));
       throw new Error(error.error || 'Unable to process this photo.');
     }
-    const blob = await response.blob();
+    const blob = await addSuitTemplate(await response.blob());
     if (run !== detectionRun || version !== editVersion) return;
     if (objectUrl) URL.revokeObjectURL(objectUrl);
     objectUrl = URL.createObjectURL(blob);
