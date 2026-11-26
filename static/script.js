@@ -7,6 +7,7 @@ const result = document.getElementById('result');
 const download = document.getElementById('download');
 const placeholder = document.querySelector('.placeholder');
 let photo = null;
+let manualCropApplied = false;
 let objectUrl = null;
 let detectedFace = null;
 let detectionRun = 0;
@@ -157,6 +158,10 @@ async function setFile(file) {
     status.textContent = 'The maximum file size is 12 MB.'; return;
   }
   photo = file;
+  manualCropApplied = false;
+  document.getElementById('openCrop').disabled = false;
+  document.getElementById('cropEditor').hidden = true;
+  document.getElementById('cropNotice').textContent = '';
   detectedFace = null;
   const run = ++detectionRun;
   generate.disabled = true;
@@ -207,7 +212,10 @@ async function processPhoto() {
   body.append('smooth', smoothSlider.value);
   body.append('brightness', brightnessSlider.value);
   body.append('auto_enhance', 'true');
-  if (detectedFace) {
+  if (manualCropApplied) {
+    body.append('manual_crop', 'true');
+    body.append('require_face', 'false');
+  } else if (detectedFace) {
     body.append('face', detectedFace.join(','));
     body.append('require_face', 'true');
   } else {
@@ -238,7 +246,7 @@ async function processPhoto() {
     download.download = 'passport-' + body.get('background') + '-' + body.get('size') + '.jpg';
     download.classList.remove('disabled');
     download.setAttribute('aria-disabled', 'false');
-    status.textContent = detectedFace ? 'Your photo is ready to download.' : 'Approximate crop ready. Face detector was unavailable; inspect the head and shoulders carefully before downloading.';
+    status.textContent = manualCropApplied ? 'Your manually cropped photo is ready. Check official passport positioning requirements.' : detectedFace ? 'Your photo is ready to download.' : 'Approximate crop ready. Face detector was unavailable; inspect the head and shoulders carefully before downloading.';
   } catch (error) {
     if (run === detectionRun) status.textContent = error.name === 'AbortError' ? 'Processing timed out. Please retry; the server may be cold-starting.' : error.message;
   } finally {
@@ -249,3 +257,98 @@ async function processPhoto() {
   }
 }
 generate.addEventListener('click', processPhoto);
+
+
+// Manual crop: drag inside the box to reposition, drag the bottom-right corner to resize.
+const cropCanvas = document.getElementById('cropCanvas');
+const cropCtx = cropCanvas.getContext('2d');
+const cropEditor = document.getElementById('cropEditor');
+let cropBitmap = null, cropBox = null, cropDrag = null;
+function cropAspect() {
+  const sizes = {'35x45':35/45, '2x2':1, '25x35':25/35};
+  return sizes[document.getElementById('size').value] || 35/45;
+}
+function renderCrop() {
+  if (!cropBitmap || !cropBox) return;
+  const {width:w,height:h} = cropCanvas;
+  cropCtx.clearRect(0,0,w,h);
+  cropCtx.drawImage(cropBitmap,0,0,w,h);
+  cropCtx.fillStyle='rgba(8,20,39,.55)';
+  cropCtx.fillRect(0,0,w,cropBox.y);
+  cropCtx.fillRect(0,cropBox.y,cropBox.x,cropBox.h);
+  cropCtx.fillRect(cropBox.x+cropBox.w,cropBox.y,w-cropBox.x-cropBox.w,cropBox.h);
+  cropCtx.fillRect(0,cropBox.y+cropBox.h,w,h-cropBox.y-cropBox.h);
+  cropCtx.strokeStyle='#fff';cropCtx.lineWidth=2;cropCtx.strokeRect(cropBox.x,cropBox.y,cropBox.w,cropBox.h);
+  cropCtx.strokeStyle='#267cf6';cropCtx.lineWidth=4;
+  cropCtx.beginPath();cropCtx.moveTo(cropBox.x+cropBox.w-18,cropBox.y+cropBox.h);cropCtx.lineTo(cropBox.x+cropBox.w,cropBox.y+cropBox.h);cropCtx.lineTo(cropBox.x+cropBox.w,cropBox.y+cropBox.h-18);cropCtx.stroke();
+}
+document.getElementById('openCrop').addEventListener('click', async () => {
+  if (!photo) return;
+  cropEditor.hidden=false;
+  document.getElementById('cropNotice').textContent='Drag the selection or resize using the blue bottom-right corner.';
+  try {
+    if (cropBitmap) cropBitmap.close();
+    cropBitmap = await createImageBitmap(photo);
+    const scale = Math.min(1, 900/Math.max(cropBitmap.width,cropBitmap.height));
+    cropCanvas.width=Math.round(cropBitmap.width*scale);
+    cropCanvas.height=Math.round(cropBitmap.height*scale);
+    const ratio=cropAspect();
+    const h=Math.min(cropCanvas.height*.8,cropCanvas.width*.8/ratio);
+    const w=h*ratio;
+    cropBox={x:(cropCanvas.width-w)/2,y:(cropCanvas.height-h)/2,w,h};
+    renderCrop();
+  } catch(e) {document.getElementById('cropNotice').textContent='Unable to open this photo for cropping.';}
+});
+function cropPointer(e) {
+  const r=cropCanvas.getBoundingClientRect();
+  return {x:(e.clientX-r.left)*cropCanvas.width/r.width,y:(e.clientY-r.top)*cropCanvas.height/r.height};
+}
+cropCanvas.addEventListener('pointerdown',e=>{
+  if(!cropBox)return;
+  const p=cropPointer(e), b=cropBox;
+  const handle=Math.hypot(p.x-(b.x+b.w),p.y-(b.y+b.h))<32;
+  if(!handle && !(p.x>=b.x&&p.x<=b.x+b.w&&p.y>=b.y&&p.y<=b.y+b.h))return;
+  cropDrag={p,b:{...b},mode:handle?'resize':'move'};
+  cropCanvas.setPointerCapture(e.pointerId);
+});
+cropCanvas.addEventListener('pointermove',e=>{
+  if(!cropDrag)return;
+  const p=cropPointer(e),dx=p.x-cropDrag.p.x,dy=p.y-cropDrag.p.y,b=cropDrag.b;
+  if(cropDrag.mode==='move') {
+    cropBox.x=Math.max(0,Math.min(cropCanvas.width-b.w,b.x+dx));
+    cropBox.y=Math.max(0,Math.min(cropCanvas.height-b.h,b.y+dy));
+  } else {
+    const ratio=cropAspect();
+    const maxW=Math.min(cropCanvas.width-b.x,(cropCanvas.height-b.y)*ratio);
+    const newW=Math.max(Math.min(60,maxW),Math.min(maxW,Math.max(b.w+dx,(b.h+dy)*ratio)));
+    cropBox.w=newW;cropBox.h=newW/ratio;
+  }
+  renderCrop();
+});
+['pointerup','pointercancel'].forEach(t=>cropCanvas.addEventListener(t,()=>cropDrag=null));
+document.getElementById('cancelCrop').addEventListener('click',()=>{cropEditor.hidden=true;});
+document.getElementById('applyCrop').addEventListener('click',async()=>{
+  if(!cropBitmap||!cropBox)return;
+  const scaleX=cropBitmap.width/cropCanvas.width,scaleY=cropBitmap.height/cropCanvas.height;
+  const out=document.createElement('canvas');
+  out.width=Math.max(1,Math.round(cropBox.w*scaleX));
+  out.height=Math.max(1,Math.round(cropBox.h*scaleY));
+  out.getContext('2d').drawImage(cropBitmap,cropBox.x*scaleX,cropBox.y*scaleY,cropBox.w*scaleX,cropBox.h*scaleY,0,0,out.width,out.height);
+  const blob=await new Promise(resolve=>out.toBlob(resolve,'image/jpeg',.94));
+  if(!blob)return;
+  // This crop is already positioned by the user: do not run face detection again.
+  detectionRun++;
+  manualCropApplied=true;
+  detectedFace=null;
+  photo=new File([blob],'manual-crop.jpg',{type:'image/jpeg'});
+  if(objectUrl)URL.revokeObjectURL(objectUrl);
+  objectUrl=URL.createObjectURL(blob);
+  result.src=objectUrl;result.alt='Manually cropped original — processing not complete';
+  result.hidden=false;placeholder.hidden=true;
+  disableDownload();
+  cropEditor.hidden=true;
+  document.getElementById('faceStatus').textContent='✓ Manual crop selected — AI face detection not required.';
+  document.getElementById('cropNotice').textContent='Crop applied. Generating your photo with background removal…';
+  generate.disabled=false;
+  await processPhoto();
+});

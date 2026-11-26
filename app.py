@@ -126,7 +126,7 @@ def crop_around_face(image, dimensions, face, zoom, shift_x, shift_y):
                                         round(left + crop_width), round(top + crop_height)))
     return framed.resize(dimensions, Image.Resampling.LANCZOS)
 
-def make_photo(data, background, size_key, smooth=0, brightness=0, face=None, zoom=100, shift_x=0, shift_y=0, auto_enhance=False):
+def make_photo(data, background, size_key, smooth=0, brightness=0, face=None, zoom=100, shift_x=0, shift_y=0, auto_enhance=False, manual_crop=False):
     if background not in COLORS or size_key not in SIZES:
         raise ValueError("Choose a valid background color and photo size.")
     try:
@@ -147,7 +147,8 @@ def make_photo(data, background, size_key, smooth=0, brightness=0, face=None, zo
         cutout = Image.open(io.BytesIO(cutout)).convert("RGBA")
     width_mm, height_mm = SIZES[size_key]
     dimensions = (round(width_mm / 25.4 * 300), round(height_mm / 25.4 * 300))
-    fitted = (crop_around_face(cutout, dimensions, face, zoom, shift_x, shift_y)
+    fitted = (ImageOps.fit(cutout, dimensions, method=Image.Resampling.LANCZOS)
+              if manual_crop else crop_around_face(cutout, dimensions, face, zoom, shift_x, shift_y)
               if face is not None else crop_head_and_chest(cutout, dimensions))
     if auto_enhance:
         from PIL import ImageStat
@@ -212,7 +213,7 @@ def process():
                 raise ValueError("Invalid face coordinates.")
         if request.form.get("require_face") == "true" and face is None:
             raise ValueError("Face detection is required. Please upload a clear front-facing photo.")
-        photo = make_photo(data, background, size, smooth, brightness, face, zoom, shift_x, shift_y, request.form.get('auto_enhance') == 'true')
+        photo = make_photo(data, background, size, smooth, brightness, face, zoom, shift_x, shift_y, request.form.get('auto_enhance') == 'true', request.form.get('manual_crop') == 'true')
     except ValueError as exc:
         return jsonify(error=str(exc)), 400
     except Exception as exc:
