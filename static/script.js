@@ -12,6 +12,7 @@ let detectedFace = null;
 let detectionRun = 0;
 let processing = false;
 let editVersion = 0;
+const withTimeout = (promise, ms, message) => Promise.race([promise, new Promise((_, reject) => setTimeout(() => reject(new Error(message)), ms))]);
 const formalSuit = document.getElementById('formalSuit');
 formalSuit.addEventListener('change', () => {
   disableDownload();
@@ -53,7 +54,7 @@ async function detectFace(file, run) {
   message.textContent = 'Detecting face on your device…';
   let bitmap;
   try {
-    bitmap = await createImageBitmap(file, {imageOrientation:'from-image'});
+    bitmap = await withTimeout(createImageBitmap(file, {imageOrientation:'from-image'}), 8000, 'Could not open image');
     let box = null;
     if ('FaceDetector' in window) {
       try {
@@ -62,12 +63,12 @@ async function detectFace(file, run) {
       } catch (_) { /* Try the free MediaPipe detector instead. */ }
     }
     if (!box) {
-      const {FaceDetector: MPFaceDetector, FilesetResolver} = await import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/+esm');
-      const vision = await FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm');
-      const detector = await MPFaceDetector.createFromOptions(vision, {
+      const {FaceDetector: MPFaceDetector, FilesetResolver} = await withTimeout(import('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/+esm'), 12000, 'Face detector download timed out');
+      const vision = await withTimeout(FilesetResolver.forVisionTasks('https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm'), 12000, 'Face detector initialization timed out');
+      const detector = await withTimeout(MPFaceDetector.createFromOptions(vision, {
         baseOptions: {modelAssetPath:'https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite'},
         runningMode:'IMAGE'
-      });
+      }), 18000, 'Face model loading timed out');
       try {
         const canvas = document.createElement('canvas');
         const scale = Math.min(1, 1024 / Math.max(bitmap.width, bitmap.height));
@@ -93,7 +94,7 @@ async function detectFace(file, run) {
       message.textContent = 'No face found. Upload a clearer front-facing portrait. No incorrect full-body result will be generated.';
     }
   } catch (error) {
-    if (run === detectionRun) message.textContent = 'Face detection unavailable. Check internet access and try again.';
+    if (run === detectionRun) message.textContent = 'Face detection could not load: ' + error.message + '. Try again or use another photo.';
     console.warn('Face detection:', error);
   } finally {
     if (bitmap) bitmap.close();
@@ -138,13 +139,13 @@ async function setFile(file) {
   dropzone.querySelector('small').textContent = (file.size / 1024 / 1024).toFixed(2) + ' MB · Click to replace';
   if (objectUrl) URL.revokeObjectURL(objectUrl);
   objectUrl = URL.createObjectURL(file);
-  result.hidden = true; placeholder.hidden = false;
-  placeholder.querySelector('strong').textContent = 'Detecting face and creating passport photo…';
+  result.src = objectUrl; result.hidden = false; placeholder.hidden = true;
+  result.alt = 'Original uploaded photo — processing not complete';
   disableDownload();
   await detectFace(file, run);
   if (run === detectionRun) {
     if (detectedFace) await processPhoto();
-    else { generate.disabled = false; status.textContent = 'Face not detected. Try another clear photo; the app will not generate an incorrect full-body crop.'; }
+    else { generate.disabled = false; status.textContent = 'Showing original upload only (not a passport result). Face detection failed; try a clear front-facing photo or reload the page.'; }
   }
 }
 input.addEventListener('change', () => setFile(input.files[0]));
@@ -190,7 +191,11 @@ async function processPhoto() {
   generate.textContent = 'Processing your photo…';
   status.textContent = 'Removing the background. First-time processing may take longer.';
   try {
-    const response = await fetch('/api/process', {method:'POST', body});
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 60000);
+    let response;
+    try { response = await fetch('/api/process', {method:'POST', body, signal: controller.signal}); }
+    finally { clearTimeout(timeout); }
     if (!response.ok) {
       const error = await response.json().catch(() => ({}));
       throw new Error(error.error || 'Unable to process this photo.');
@@ -206,7 +211,7 @@ async function processPhoto() {
     download.setAttribute('aria-disabled', 'false');
     status.textContent = 'Your photo is ready to download.';
   } catch (error) {
-    if (run === detectionRun) status.textContent = error.message;
+    if (run === detectionRun) status.textContent = error.name === 'AbortError' ? 'Processing timed out. Please retry; the server may be cold-starting.' : error.message;
   } finally {
     processing = false;
     if (run !== detectionRun && photo && detectedFace) { processPhoto(); return; }
