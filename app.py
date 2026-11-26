@@ -210,6 +210,8 @@ def process():
             face = tuple(float(value) for value in parts)
             if not all(__import__("math").isfinite(value) for value in face):
                 raise ValueError("Invalid face coordinates.")
+        if request.form.get("require_face") == "true" and face is None:
+            raise ValueError("Face detection is required. Please upload a clear front-facing photo.")
         photo = make_photo(data, background, size, smooth, brightness, face, zoom, shift_x, shift_y, request.form.get('auto_enhance') == 'true')
     except ValueError as exc:
         return jsonify(error=str(exc)), 400
