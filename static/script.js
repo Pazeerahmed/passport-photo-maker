@@ -83,14 +83,17 @@ async function detectFace(file, run) {
     }
     if (run !== detectionRun) return;
     if (box) {
-      detectedFace = [box.x / bitmap.width, box.y / bitmap.height, box.width / bitmap.width, box.height / bitmap.height]
-        .map(v => Math.max(0, Math.min(1, v)));
+      const x = Math.max(0, box.x), y = Math.max(0, box.y);
+      const w = Math.max(0, Math.min(box.width, bitmap.width - x));
+      const h = Math.max(0, Math.min(box.height, bitmap.height - y));
+      if (w < bitmap.width * 0.025 || h < bitmap.height * 0.025) throw new Error('Face detection too small');
+      detectedFace = [x / bitmap.width, y / bitmap.height, w / bitmap.width, h / bitmap.height];
       message.textContent = '✓ Face detected — automatic passport crop ready.';
     } else {
-      message.textContent = 'No face found. Use a clear front-facing portrait; automatic outline crop will be used.';
+      message.textContent = 'No face found. Upload a clearer front-facing portrait. No incorrect full-body result will be generated.';
     }
   } catch (error) {
-    if (run === detectionRun) message.textContent = 'Face detection unavailable. Check internet access; outline crop remains available.';
+    if (run === detectionRun) message.textContent = 'Face detection unavailable. Check internet access and try again.';
     console.warn('Face detection:', error);
   } finally {
     if (bitmap) bitmap.close();
@@ -135,10 +138,14 @@ async function setFile(file) {
   dropzone.querySelector('small').textContent = (file.size / 1024 / 1024).toFixed(2) + ' MB · Click to replace';
   if (objectUrl) URL.revokeObjectURL(objectUrl);
   objectUrl = URL.createObjectURL(file);
-  result.src = objectUrl; result.hidden = false; placeholder.hidden = true;
+  result.hidden = true; placeholder.hidden = false;
+  placeholder.querySelector('strong').textContent = 'Detecting face and creating passport photo…';
   disableDownload();
   await detectFace(file, run);
-  if (run === detectionRun) await processPhoto();
+  if (run === detectionRun) {
+    if (detectedFace) await processPhoto();
+    else { generate.disabled = false; status.textContent = 'Face not detected. Try another clear photo; the app will not generate an incorrect full-body crop.'; }
+  }
 }
 input.addEventListener('change', () => setFile(input.files[0]));
 ['dragenter','dragover'].forEach(type => dropzone.addEventListener(type, event => {
@@ -160,6 +167,10 @@ document.getElementById('size').addEventListener('change', () => {
 });
 async function processPhoto() {
   if (!photo || processing) return;
+  if (!detectedFace) {
+    status.textContent = 'Cannot crop safely without detecting a face. Upload a clear front-facing photo.';
+    return;
+  }
   processing = true;
   const run = detectionRun;
   const version = editVersion;
@@ -170,7 +181,8 @@ async function processPhoto() {
   body.append('smooth', smoothSlider.value);
   body.append('brightness', brightnessSlider.value);
   body.append('auto_enhance', 'true');
-  if (detectedFace) body.append('face', detectedFace.join(','));
+  body.append('face', detectedFace.join(','));
+  body.append('require_face', 'true');
   body.append('zoom', cropInputs[0].value);
   body.append('shift_x', cropInputs[1].value);
   body.append('shift_y', cropInputs[2].value);
@@ -197,7 +209,7 @@ async function processPhoto() {
     if (run === detectionRun) status.textContent = error.message;
   } finally {
     processing = false;
-    if (run !== detectionRun && photo) { processPhoto(); return; }
+    if (run !== detectionRun && photo && detectedFace) { processPhoto(); return; }
     generate.disabled = !photo;
     generate.textContent = '↻ Regenerate Photo';
   }
