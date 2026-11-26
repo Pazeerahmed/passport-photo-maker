@@ -171,7 +171,10 @@ async function setFile(file) {
   await detectFace(file, run);
   if (run === detectionRun) {
     if (detectedFace) await processPhoto();
-    else { generate.disabled = false; status.textContent = 'Showing original upload only (not a passport result). Face detection failed; try a clear front-facing photo or reload the page.'; }
+    else {
+      document.getElementById('faceStatus').textContent = '⚠ Face detector unavailable. Using an approximate automatic head-and-shoulders crop instead; check positioning before official use.';
+      await processPhoto();
+    }
   }
 }
 input.addEventListener('change', () => setFile(input.files[0]));
@@ -194,10 +197,6 @@ document.getElementById('size').addEventListener('change', () => {
 });
 async function processPhoto() {
   if (!photo || processing) return;
-  if (!detectedFace) {
-    status.textContent = 'Cannot crop safely without detecting a face. Upload a clear front-facing photo.';
-    return;
-  }
   processing = true;
   const run = detectionRun;
   const version = editVersion;
@@ -208,8 +207,12 @@ async function processPhoto() {
   body.append('smooth', smoothSlider.value);
   body.append('brightness', brightnessSlider.value);
   body.append('auto_enhance', 'true');
-  body.append('face', detectedFace.join(','));
-  body.append('require_face', 'true');
+  if (detectedFace) {
+    body.append('face', detectedFace.join(','));
+    body.append('require_face', 'true');
+  } else {
+    body.append('require_face', 'false');
+  }
   body.append('zoom', cropInputs[0].value);
   body.append('shift_x', cropInputs[1].value);
   body.append('shift_y', cropInputs[2].value);
@@ -235,12 +238,12 @@ async function processPhoto() {
     download.download = 'passport-' + body.get('background') + '-' + body.get('size') + '.jpg';
     download.classList.remove('disabled');
     download.setAttribute('aria-disabled', 'false');
-    status.textContent = 'Your photo is ready to download.';
+    status.textContent = detectedFace ? 'Your photo is ready to download.' : 'Approximate crop ready. Face detector was unavailable; inspect the head and shoulders carefully before downloading.';
   } catch (error) {
     if (run === detectionRun) status.textContent = error.name === 'AbortError' ? 'Processing timed out. Please retry; the server may be cold-starting.' : error.message;
   } finally {
     processing = false;
-    if (run !== detectionRun && photo && detectedFace) { processPhoto(); return; }
+    if (run !== detectionRun && photo) { processPhoto(); return; }
     generate.disabled = !photo;
     generate.textContent = '↻ Regenerate Photo';
   }
